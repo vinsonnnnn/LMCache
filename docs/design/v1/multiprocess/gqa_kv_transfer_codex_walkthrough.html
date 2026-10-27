@@ -1,0 +1,1003 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><meta charset="utf-8"/><meta content="width=device-width,initial-scale=1" name="viewport"/><title>Codex GQA KV transfer walkthrough</title><style>
+body{margin:0;font:17px/1.85 system-ui,sans-serif;color:#17242f;background:#fafbfc}
+nav{position:fixed;inset:0 auto 0 0;width:270px;overflow:auto;padding:24px;background:#eef3f6;font-size:13px}
+nav ul{padding-left:17px}nav a{color:#345468;text-decoration:none}
+main{max-width:1000px;margin:0 30px 0 335px;padding:28px 0 90px}
+h1{font-size:32px}h2{margin-top:55px;border-bottom:1px solid #cad5df;padding-bottom:10px;scroll-margin-top:20px}
+h3{margin-top:30px}a{color:#075d9b}table{border-collapse:collapse;width:100%;font-size:15px}
+th,td{border:1px solid #cdd8e0;padding:8px 12px;text-align:left}th{background:#eaf0f5}
+pre{overflow:auto;background:#102738;color:#e8f2f7;padding:18px;border-radius:6px;font:14px/1.65 Consolas,monospace}
+code{font-family:Consolas,monospace}p code,li code{background:#e9eef2;padding:2px 4px;border-radius:3px}
+blockquote{border-left:4px solid #6a99b4;padding-left:18px;color:#385061}
+@media(max-width:1000px){nav{display:none}main{margin:0 20px}}
+@media print{nav{display:none}main{margin:0}pre{white-space:pre-wrap;background:#f0f2f4;color:#111}}
+</style><nav><div class="toc">
+<ul>
+<li><a href="#codex-gqa-kv">用 Codex 从零完成单卡 GQA KV 传输分析与局部优化</a><ul>
+<li><a href="#_1">阅读方式与最终成果</a></li>
+<li><a href="#0-codex">步骤 0：建立 Codex 工作约定</a><ul>
+<li><a href="#_2">你做什么</a></li>
+<li><a href="#codexp00">发给 Codex：P00</a></li>
+</ul>
+</li>
+<li><a href="#1">步骤 1：先理解这次究竟在搬什么</a><ul>
+<li><a href="#_3">需要掌握的最少概念</a></li>
+<li><a href="#codexp01">发给 Codex：P01</a></li>
+</ul>
+</li>
+<li><a href="#2-linux">步骤 2：准备 Linux 与开发工具</a><ul>
+<li><a href="#_4">你做什么</a></li>
+<li><a href="#codexp02">发给 Codex：P02</a></li>
+</ul>
+</li>
+<li><a href="#3-checkout">步骤 3：建立独立 checkout 并固定基线</a><ul>
+<li><a href="#_5">你做什么</a></li>
+<li><a href="#codexp03">发给 Codex：P03</a></li>
+</ul>
+</li>
+<li><a href="#4-cuda">步骤 4：安装并确认加载了真正的 CUDA 扩展</a><ul>
+<li><a href="#_6">你做什么</a></li>
+<li><a href="#codexp04">发给 Codex：P04</a></li>
+</ul>
+</li>
+<li><a href="#5">步骤 5：画调用链，确认真正执行的传输路径</a><ul>
+<li><a href="#_7">你做什么</a></li>
+<li><a href="#codexp05">发给 Codex：P05</a></li>
+</ul>
+</li>
+<li><a href="#6-kv-smoke-test">步骤 6：先跑不加载模型的合成 KV smoke test</a><ul>
+<li><a href="#_8">你做什么</a></li>
+<li><a href="#codexp06">发给 Codex：P06</a></li>
+</ul>
+</li>
+<li><a href="#7-codex-microbenchmark">步骤 7：让 Codex 建立最小、可信的 microbenchmark</a><ul>
+<li><a href="#_9">你做什么</a></li>
+<li><a href="#codexp07">发给 Codex：P07</a></li>
+<li><a href="#_10">计时的最低要求</a></li>
+</ul>
+</li>
+<li><a href="#8">步骤 8：采集可重复的原版数据</a><ul>
+<li><a href="#_11">你做什么</a></li>
+<li><a href="#codexp08">发给 Codex：P08</a></li>
+</ul>
+</li>
+<li><a href="#9-nsight-systems">步骤 9：用 Nsight Systems 找到时间花在哪里</a><ul>
+<li><a href="#_12">你做什么</a></li>
+<li><a href="#mp-server">如果使用独立 MP server</a></li>
+<li><a href="#codexp09">发给 Codex：P09</a></li>
+</ul>
+</li>
+<li><a href="#10-nsight-compute">步骤 10：决定是否需要 Nsight Compute</a><ul>
+<li><a href="#_13">你做什么</a></li>
+<li><a href="#codexp10">发给 Codex：P10</a></li>
+</ul>
+</li>
+<li><a href="#11">步骤 11：从证据中选择一个局部优化</a><ul>
+<li><a href="#_14">你做什么</a></li>
+<li><a href="#_15">一条特别值得验证的假设</a></li>
+<li><a href="#codexp11">发给 Codex：P11</a></li>
+</ul>
+</li>
+<li><a href="#12">步骤 12：做一次最小实现，重新构建</a><ul>
+<li><a href="#_16">你做什么</a></li>
+<li><a href="#codexp12">发给 Codex：P12</a></li>
+</ul>
+</li>
+<li><a href="#13">步骤 13：先验证正确性，再谈性能</a><ul>
+<li><a href="#_17">你做什么</a></li>
+<li><a href="#codexp13">发给 Codex：P13</a></li>
+</ul>
+</li>
+<li><a href="#14-ab">步骤 14：严格做原版/修改版 A/B</a><ul>
+<li><a href="#_18">你做什么</a></li>
+<li><a href="#codexp14">发给 Codex：P14</a></li>
+</ul>
+</li>
+<li><a href="#15-ttft">步骤 15：接上真实小模型，验证 TTFT</a><ul>
+<li><a href="#_19">你做什么</a></li>
+<li><a href="#codexp15">发给 Codex：P15</a></li>
+</ul>
+</li>
+<li><a href="#16-pr">步骤 16：整理结果、审查与准备 PR</a><ul>
+<li><a href="#_20">你做什么</a></li>
+<li><a href="#codexp16">发给 Codex：P16</a></li>
+</ul>
+</li>
+<li><a href="#17">步骤 17：跨天继续工作与常见故障提示词</a><ul>
+<li><a href="#p17">跨会话续接：P17</a></li>
+<li><a href="#_21">报错时直接复制的提示词</a></li>
+</ul>
+</li>
+<li><a href="#_22">建议的第一周安排</a></li>
+<li><a href="#_23">资料与证据索引</a></li>
+</ul>
+</li>
+</ul>
+</div>
+</nav><main><h1 id="codex-gqa-kv">用 Codex 从零完成单卡 GQA KV 传输分析与局部优化</h1>
+<p>更新：2026-10-27。适用条件：一张 RTX 4090 Laptop GPU，目标岗位为推理优化。</p>
+<p>带目录的 <a href="gqa_kv_transfer_codex_walkthrough.html">HTML 阅读版</a> 可下载后在浏览器中打开。</p>
+<p>本教程把“GPU↔CPU KV 传输”和“GQA gather/scatter”作为调查对象，指导你借助 Codex 完成环境检查、源码定位、实验、优化与 PR 准备。它不是已完成的性能实验，也不保证一定找到值得合并的改动。文中的时间、显存和规模均为起点；结果表需要填写你的实测数据。</p>
+<h2 id="_1">阅读方式与最终成果</h2>
+<p>按步骤完成，一次把当前步骤的提示词发给 Codex。<code>P00</code> 等编号只是方便引用的提示词名称，不是 Codex 命令。除标有 PowerShell 的代码块外，终端命令均在 Linux/WSL2 的 Bash 中执行。</p>
+<p>每一步都区分“你做什么”“交给 Codex 的任务”和“验收条件”。先通过当前验收，再发下一条提示词。遇到报错，把原始输出和文件路径交给 Codex；不要只告诉它“失败了”。</p>
+<p>完整成果包括：</p>
+<ol>
+<li>固定版本、能重复运行的小模型与合成 KV 环境。</li>
+<li>源码调用链与实际执行路径的证据。</li>
+<li>正确性通过的 microbenchmark、原始数据和 Nsight 时间线。</li>
+<li>一个被证据支持的局部改动；或者一份解释为什么无需改动的负结果。</li>
+<li>原版/修改版对照、端到端 TTFT 检查，以及可供维护者审阅的 PR 草稿。</li>
+</ol>
+<p>个人实验先写在 <code>build/kv-transfer-lab/</code> 下，避免把试验脚本和大型 trace 混进正式 PR。本文覆盖 MP 模块及其 CUDA 数据路径，因此放在对应的设计文档目录；它不是面向所有用户的安装指南。</p>
+<h2 id="0-codex">步骤 0：建立 Codex 工作约定</h2>
+<h3 id="_2">你做什么</h3>
+<p>在能访问实验 checkout 的 Codex 本地会话中工作。当前聊天能看见 Windows 的 <code>E:\LMCache</code>，并不代表它已经在 Linux 的虚拟环境里，也不代表执行主机就是你的笔记本。让 Codex先检查实际环境。</p>
+<p>如果使用 IDE，在 Linux/WSL2 checkout 中打开项目；如果使用 CLI，在目标目录运行已安装的 <code>codex</code>。不要求特定模型或付费档位。GPU 实验最终必须在能访问你那张卡的环境执行。</p>
+<p>官方 Codex 文档建议提供目标、相关上下文和验证要求；下面的提示词是针对本项目编写的实践模板。<a href="https://learn.chatgpt.com/docs/prompting">OpenAI 官方提示词文档</a></p>
+<h3 id="codexp00">发给 Codex：P00</h3>
+<pre><code class="language-text">你是我的 LMCache 推理优化导师和编码助手。我只有一张 RTX 4090 Laptop GPU，
+目标是学习并完成 GPU↔CPU GQA KV 传输分析，最终争取一个范围小、证据充分的 PR。
+
+先读取当前仓库的 AGENTS.md 和适用的子目录指引，遵守项目约定，不修改 AGENTS.md。
+每次只完成我当前指定的步骤。能执行的检查实际执行；无法执行时写明原因，
+不要把建议命令、mock 通过或推测写成 GPU 实测。
+
+全程遵守：
+- 先确认实际调用路径与基线，再决定是否改代码；只优化一个被证据支持的热点。
+- 不为提高数字关闭正确性检查，不擅自删除同步或放宽断言。
+- 新代码使用公共接口，遵守 SPDX、类型、docstring、导入和私有成员访问约定。
+- 不覆盖我的改动，不同时运行多个 GPU 性能实验。
+- 实验资料放 build/kv-transfer-lab/；不要提交模型、trace、虚拟环境或机器配置。
+- 不创建 GitHub 评论、不推送、不发布 PR，除非我明确要求。
+
+每一步结束报告：执行命令、退出状态、证据路径、结论、未知项和下一步条件。
+先告诉我实际 cwd、操作系统、Python、是否能访问 GPU，以及 Git 工作区状态。
+</code></pre>
+<p><strong>验收：</strong>你知道 Codex 实际控制哪台主机、哪个目录；没有为了“准备环境”改动生产代码。</p>
+<h2 id="1">步骤 1：先理解这次究竟在搬什么</h2>
+<h3 id="_3">需要掌握的最少概念</h3>
+<table>
+<thead>
+<tr>
+<th>名称</th>
+<th>在本项目中的含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GQA</td>
+<td>query heads 多于 KV heads；计算 KV 大小时使用 KV heads</td>
+</tr>
+<tr>
+<td>paged KV</td>
+<td>引擎用 block table 把逻辑 token 映射到 GPU 物理 KV blocks</td>
+</tr>
+<tr>
+<td>chunk</td>
+<td>LMCache 的缓存单位，可能包含多个引擎 blocks</td>
+</tr>
+<tr>
+<td>gather/store</td>
+<td>按映射从 GPU paged KV 收集数据，写入 LMCache 对象</td>
+</tr>
+<tr>
+<td>scatter/retrieve</td>
+<td>将缓存对象恢复到指定 GPU blocks，保持逻辑 KV 内容一致</td>
+</tr>
+<tr>
+<td>pinned memory</td>
+<td>经过页锁定/注册的 host memory；不等于 GPU 显存</td>
+</tr>
+<tr>
+<td>staging</td>
+<td>为拷贝或布局转换使用的临时缓冲区</td>
+</tr>
+<tr>
+<td>stream / event</td>
+<td>GPU 工作队列及其完成/依赖信号；提交返回不代表传输完成</td>
+</tr>
+<tr>
+<td>TTFT</td>
+<td>客户端收到首 token 的时间，包含排队等环节</td>
+</tr>
+</tbody>
+</table>
+<p>概念性数据流：</p>
+<pre><code class="language-text">STORE:    GPU paged KV → gather/拷贝 → CPU pinned KV object
+RETRIEVE: CPU pinned KV object → 拷贝/scatter → GPU paged KV
+</code></pre>
+<p>具体实现可以有 staging，也可以直接拷贝；并非每次都会执行一个叫 scatter 的 kernel。</p>
+<p>以 Qwen2.5-1.5B、TP=1、BF16/FP16 KV 为例，按官方配置推导：</p>
+<pre><code class="language-text">head_dim = hidden_size / query_heads = 1536 / 12 = 128
+bytes_per_token = 2(K,V) × 28(layers) × 2(KV heads) × 128 × 2(bytes)
+                = 28672 bytes = 28 KiB
+256-token chunk = 7 MiB
+8192-token prefix = 224 MiB
+</code></pre>
+<p>这些是有效张量字节，不包括对齐、元数据、临时空间或权重。<a href="https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct/blob/main/config.json">模型配置</a></p>
+<h3 id="codexp01">发给 Codex：P01</h3>
+<pre><code class="language-text">只做概念与源码阅读，不修改代码。
+用一个 2 层、2 个 KV heads、head_dim=4、block_size=2、chunk_size=4 的玩具例子，
+说明逻辑 tokens、block IDs、GPU KV layout 和 LMCache chunk 之间的关系。
+画出 store/retrieve 的索引映射，解释为什么只测 torch.Tensor.copy_ 不能代表生产路径。
+再从实际模型 config 推导 Qwen2.5-1.5B 的 KV 字节数。
+把源码事实、用于讲解的简化和需要运行时确认的部分分开。
+输出 build/kv-transfer-lab/concepts.md，并列出我应该能自行回答的 5 个检查问题。
+</code></pre>
+<p><strong>验收：</strong>你能解释“一个 7 MiB chunk”与“一个 kernel/拷贝描述符搬多少字节”是不同尺度。</p>
+<h2 id="2-linux">步骤 2：准备 Linux 与开发工具</h2>
+<h3 id="_4">你做什么</h3>
+<p>优先使用已有的原生 Linux。已有 Windows 环境可以从 WSL2 起步，先验证 CUDA 与目标路径；不需要为本教程直接重装系统。</p>
+<p>Windows PowerShell 中先检查：</p>
+<pre><code class="language-powershell">wsl --status
+wsl --list --verbose
+</code></pre>
+<p>仅当尚未安装且决定使用 WSL2 时，按 Microsoft/系统提示安装，例如：</p>
+<pre><code class="language-powershell">wsl --install -d Ubuntu-24.04
+</code></pre>
+<p>进入 Ubuntu 后，将实验 checkout 放在 Linux 文件系统，例如 <code>~/src/</code>。WSL2 使用 Windows NVIDIA 驱动；不要在 WSL 中额外安装 Linux 显示驱动。CUDA Toolkit 与驱动是不同组件。<a href="https://docs.nvidia.com/cuda/wsl-user-guide/index.html">CUDA on WSL 官方指南</a></p>
+<p>切换操作系统或执行环境后，在目标环境重新发送 P00 的环境检查要求。后续安装、构建和实验都在同一 Linux 环境完成，不能用 Windows 端检查的 Python 路径推断 WSL 内的环境。</p>
+<p>Linux 中检查：</p>
+<pre><code class="language-bash">uname -a
+nvidia-smi
+free -h
+df -h .
+command -v git
+command -v uv
+command -v nvcc
+command -v nsys
+command -v ncu
+</code></pre>
+<p>缺少基础构建工具时，可在 Ubuntu 安装：</p>
+<pre><code class="language-bash">sudo apt-get update
+sudo apt-get install -y git build-essential python3-dev python3-venv ninja-build pkg-config
+</code></pre>
+<p><code>uv</code> 未安装时，参照其官方安装方式。下面是 Linux 的一种方式，安装后打开新 shell 或按安装器输出更新 PATH：</p>
+<pre><code class="language-bash">curl -LsSf https://astral.sh/uv/install.sh | sh
+</code></pre>
+<p>CUDA Toolkit、Nsight Systems 和 Nsight Compute 根据 NVIDIA 当前支持矩阵安装。先确定后续 PyTorch/vLLM 的 CUDA 组合，再选 Toolkit，避免反复覆盖环境。<a href="https://docs.astral.sh/uv/getting-started/installation/">uv 安装</a>、<a href="https://docs.vllm.ai/en/latest/getting_started/installation/gpu/">vLLM GPU 环境要求</a></p>
+<h3 id="codexp02">发给 Codex：P02</h3>
+<pre><code class="language-text">检查实验环境，先执行只读命令，不安装或升级驱动。
+记录 GPU 型号、显存、可用主存、磁盘空间、WSL/原生 Linux、编译器和 profiler。
+区分 nvidia-smi 显示的驱动支持 CUDA 版本、nvcc Toolkit 版本和 torch.version.cuda。
+说明缺少哪个组件会阻止：运行 PyTorch、编译 LMCache CUDA 扩展、nsys、ncu。
+结合当前官方文档给出最小安装计划和准确命令，把未知项写清楚。
+输出 build/kv-transfer-lab/environment-plan.md；不要把没有 ncu 当作不能开始全部工作。
+</code></pre>
+<p><strong>验收：</strong>系统能看到 GPU，主存预算明确。笔记本 4090 按官方 16 GB 显存规格规划，以实际查询为准。<a href="https://www.nvidia.com/en-us/geforce/laptops/40-series/">NVIDIA 规格</a> 接电、固定性能与散热模式，其他 GPU 工作保持空闲。</p>
+<h2 id="3-checkout">步骤 3：建立独立 checkout 并固定基线</h2>
+<h3 id="_5">你做什么</h3>
+<p>已有 checkout 含个人改动时，保留它们。初学者建议新建实验 checkout，而不是直接覆盖当前 <code>E:\LMCache</code>。在 Linux 中：</p>
+<pre><code class="language-bash">mkdir -p ~/src
+git clone --branch dev https://github.com/LMCache/LMCache.git ~/src/LMCache-kv-lab
+cd ~/src/LMCache-kv-lab
+git switch -c perf/gqa-kv-transfer
+mkdir -p build/kv-transfer-lab/{environment,scripts,raw,profiles,reports}
+git rev-parse HEAD &gt; build/kv-transfer-lab/environment/base-sha.txt
+git status --short
+</code></pre>
+<p>如果 <code>~/src/LMCache-kv-lab</code> 已存在，先检查并选择另一个目录，不能删除它来重跑这段命令。每个新终端都进入这个实验目录并激活对应虚拟环境。</p>
+<p>若步骤 0–2 的笔记写在另一个 checkout，只复制个人笔记到新实验目录，并在新环境重查硬件与工具。不要复制另一系统的虚拟环境或原生扩展。</p>
+<p>撰写本文时，原工作区基线为 <code>16df1bbb35c958e8353ddeeac66b4e6f89c64800</code>，与查询到的上游 dev 的传输实现有差异。因此下面提供源码搜索方法，不假定某文件在所有版本中都位于相同路径。</p>
+<h3 id="codexp03">发给 Codex：P03</h3>
+<pre><code class="language-text">在当前实验 checkout 中读取 AGENTS.md，记录提交 SHA、分支、remote 和工作区状态。
+检查该版本的构建/CI/vLLM 兼容要求，必要时查询官方上游资料。
+给我一个具体的 Python 3.12 + vLLM + PyTorch + CUDA Toolkit 安装组合，
+说明证据来源；若不能确认，先做最小兼容性检查，不要猜一个“最新版本”。
+将确定的版本和安装顺序写入 build/kv-transfer-lab/environment-plan.md。
+同时检查 #5308、#5860/#5861、#5440 是否与当前代码和我的系统有关，
+区分已合并实现、待处理兼容问题和不同硬件上的性能报告。
+</code></pre>
+<p><strong>验收：</strong>基线 SHA 已保存；当前代码是否包含 direct-copy 路径已经明确。旧版本上的学习结论不能直接当作当前 dev 的新贡献。</p>
+<h2 id="4-cuda">步骤 4：安装并确认加载了真正的 CUDA 扩展</h2>
+<h3 id="_6">你做什么</h3>
+<p>在步骤 3 确认具体版本后安装。下列模板中的 <code>VLLM_VERSION</code> 必须设置为 <code>environment-plan.md</code> 确认的实际值；不能把尖括号占位符当成版本安装。</p>
+<pre><code class="language-bash">uv venv --python 3.12 .venv
+source .venv/bin/activate
+</code></pre>
+<p>然后设置已确认的 <code>VLLM_VERSION</code>，再运行：</p>
+<pre><code class="language-bash">uv pip install "vllm==${VLLM_VERSION:?请先设置已确认的具体版本}"
+uv pip install -r requirements/build.txt
+MAX_JOBS=2 uv pip install -e . --no-build-isolation
+uv pip install -r requirements/test.txt pre-commit
+uv pip check
+</code></pre>
+<p>先让兼容的 vLLM 安装选择其依赖的 torch，不要随后随意单独升级 torch。编译 OOM 时先降低 <code>MAX_JOBS</code>；架构限制仅在确认本卡 compute capability 后设置。做 CUDA 优化不能用 <code>NO_NATIVE_EXT=1</code> 或 <code>NO_GPU_EXT=1</code> 代替 GPU 扩展构建。</p>
+<p>检查实际导入：</p>
+<pre><code class="language-bash">python - &lt;&lt;'PY'
+import sys
+import torch
+import lmcache
+import lmcache.cuda_ops as cuda_ops
+
+print("python:", sys.executable)
+print("torch:", torch.__version__, "cuda runtime:", torch.version.cuda)
+print("gpu available:", torch.cuda.is_available())
+assert torch.cuda.is_available(), "CUDA 不可用"
+print("gpu:", torch.cuda.get_device_name(0))
+print("capability:", torch.cuda.get_device_capability(0))
+print("lmcache:", lmcache.__file__)
+print("cuda_ops:", cuda_ops.__file__)
+x = torch.arange(1024, device="cuda", dtype=torch.float32)
+torch.cuda.synchronize()
+assert x.sum().item() == 523776
+print("basic CUDA check passed")
+PY
+</code></pre>
+<p>这只是 CUDA/import 检查，不证明 LMCache KV 传输正确。随后保存环境与 CLI 帮助：</p>
+<pre><code class="language-bash">uv pip freeze &gt; build/kv-transfer-lab/environment/packages.txt
+nvcc --version &gt; build/kv-transfer-lab/environment/nvcc.txt
+nvidia-smi &gt; build/kv-transfer-lab/environment/nvidia-smi.txt
+lmcache server --help &gt; build/kv-transfer-lab/environment/server-help.txt
+lmcache bench server --help &gt; build/kv-transfer-lab/environment/server-bench-help.txt
+lmcache bench engine --help &gt; build/kv-transfer-lab/environment/engine-bench-help.txt
+</code></pre>
+<h3 id="codexp04">发给 Codex：P04</h3>
+<pre><code class="language-text">按 environment-plan.md 在项目虚拟环境安装和构建，不修改系统 Python。
+确认 lmcache、torch 和 CUDA 扩展来自这份 checkout 及预期环境，记录扩展路径与文件哈希。
+执行基础 CUDA 检查，保存安装日志和 uv pip check 结果。
+失败时只处理当前首个根因，保留完整日志；不要通过禁用 CUDA 扩展让安装“成功”。
+最后标明哪些检查实际运行，哪些仍未运行。
+</code></pre>
+<p><strong>验收：</strong>原生扩展可以导入，GPU 可用，依赖一致。构建成功尚不等于运行了新 <code>.cu</code>：以后每次修改 CUDA 都必须重新构建并重启相关进程。</p>
+<h2 id="5">步骤 5：画调用链，确认真正执行的传输路径</h2>
+<h3 id="_7">你做什么</h3>
+<p>先搜索，不背文件路径：</p>
+<pre><code class="language-bash">rg -n 'direct_transfer_supported|run_direct_transfer|batch_memcpy_supported' lmcache csrc
+rg -n 'transfer_kv_per_object_group|execute_object_group_transfer' lmcache csrc
+rg -n 'gather_paged_kv_to_cpu|scatter_cpu_to_paged_kv' lmcache
+rg -n 'multi_layer_block_transfer_kernel|multi_layer_block_kv_transfer' csrc lmcache
+rg --files tests | rg 'direct_copy|mp_mem_kernels|engine_driven_transfer|transfer_dispatch'
+</code></pre>
+<p>需要分清两个维度：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>选项</th>
+<th>不能混淆的地方</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>谁负责传输</td>
+<td>lmcache-driven / engine-driven</td>
+<td>CUDA 工作可能发生在不同进程</td>
+</tr>
+<tr>
+<td>具体数据路径</td>
+<td>direct / staging + kernel / 其他受支持回退</td>
+<td>选择了 MP 模式不代表必然调用 scatter kernel</td>
+</tr>
+</tbody>
+</table>
+<p>在较新上游中，<code>lmcache/v1/multiprocess/object_group_transfer.py</code> 包含 direct 路径选择，<code>csrc/cuda/mp_mem_kernels.cu</code> 包含原生实现；旧 checkout 的组织可能不同。</p>
+<p>已合并的 <a href="https://github.com/LMCache/LMCache/pull/5308">#5308</a> 给符合条件的 layout 增加 <code>cudaMemcpyBatchAsync</code> 直接拷贝。另有 <a href="https://github.com/LMCache/LMCache/issues/5860">#5860</a>/<a href="https://github.com/LMCache/LMCache/pull/5861">#5861</a> 涉及注册 host 地址在部分 CUDA 环境的可访问性。不能靠一个 Python 布尔值或修改私有全局开关强制走不安全路径。</p>
+<h3 id="codexp05">发给 Codex：P05</h3>
+<pre><code class="language-text">只阅读源码和已有测试，输出 build/kv-transfer-lab/path-audit.md。
+分别画出 lmcache-driven 与 engine-driven 的 store/retrieve 调用链，标注：
+进程、线程、CPU 描述符准备、host pin、staging、拷贝、kernel、完成事件与资源释放。
+每条关键边给出当前 checkout 的文件、函数和行号。
+
+对 Qwen2.5-1.5B 的普通 GQA，列出必须在运行时检查的 layout/stride/block size 信息。
+说明 direct 与 kernel 的选择条件和现有公共测试入口；不要假设能使用某个环境变量强制切换。
+指出哪些路径受 #5308 影响，当前版本是否包含 #5861，如何安全验证能力。
+如果需要额外埋点，只提出最小方案，先不改生产行为。
+</code></pre>
+<p><strong>验收：</strong>你能指出应该 profile 哪个进程，知道“没有看到 scatter kernel”可能是正常的直接拷贝。</p>
+<h2 id="6-kv-smoke-test">步骤 6：先跑不加载模型的合成 KV smoke test</h2>
+<h3 id="_8">你做什么</h3>
+<p>初期先不启动 vLLM。用真实 LMCache server 和合成 GPU KV 测注册、store、retrieve 与校验，降低环境复杂度。</p>
+<p>终端 A：激活虚拟环境，在空闲端口启动独立服务。这里关闭 lazy L1，避免把默认初始化容量误带入小内存实验；两个版本要保持相同分配方式。</p>
+<pre><code class="language-bash">source .venv/bin/activate
+lmcache server \
+  --host 127.0.0.1 --port 6555 \
+  --http-host 127.0.0.1 --http-port 8080 \
+  --l1-size-gb 0.5 --no-l1-use-lazy \
+  --chunk-size 256 --eviction-policy LRU \
+  --supported-transfer-mode lmcache_driven
+</code></pre>
+<p>终端 B：同一 checkout、同一虚拟环境中：</p>
+<pre><code class="language-bash">source .venv/bin/activate
+curl --fail http://127.0.0.1:8080/healthcheck
+lmcache bench server \
+  --rpc-url tcp://127.0.0.1:6555 \
+  --url http://127.0.0.1:8080 \
+  --mode gpu --transfer-mode lmcache_driven --tp-size 1 \
+  --kvcache-shape-spec '(2,1024,16,2,128):bfloat16:28' \
+  --num-tokens 512 --start 0 --end 3 --interval 0.1
+</code></pre>
+<p>shape spec 表示 K/V=2、1024 个 blocks、每 block 16 tokens、2 KV heads、head_dim=128、28 层。它模拟 Qwen GQA 的几何规模，不证明该模型的真实引擎 layout 与它完全相同。实际 CLI 参数和校验机制以步骤 4 保存的帮助及源码为准。</p>
+<p>这条命令是功能 smoke test。三次请求、命令总耗时和终端打印速度都不足以构成性能结论。</p>
+<h3 id="codexp06">发给 Codex：P06</h3>
+<pre><code class="language-text">核对当前 server/bench-server 的实际参数后，运行小规模真实 GPU KV smoke test。
+使用 28 层、2 KV heads、head_dim=128、BF16、block_size=16、chunk_size=256，TP=1。
+先确认所需 GPU/L1 内存预算和端口，不启动 vLLM。
+检查 cold miss/store、warm hit/retrieve、目标清空和数据校验是否真实执行。
+将命令、日志、退出码及实际传输模式写入 build/kv-transfer-lab/smoke.md。
+失败就诊断，不忽略 checksum、不改“成功”的定义，不从 3 次运行得出性能结论。
+</code></pre>
+<p><strong>验收：</strong>能证明存进去的数据确实被恢复。若当前 benchmark 不能清空目标或不能可靠校验，先修复/补齐实验方法，再进入性能分析。</p>
+<h2 id="7-codex-microbenchmark">步骤 7：让 Codex 建立最小、可信的 microbenchmark</h2>
+<h3 id="_9">你做什么</h3>
+<p>本步骤才开始编写实验脚本。先读现有 GPU 测试，复用合法的公共入口与 layout 处理。不要让 Codex 凭想象写一个与生产路径无关的 <code>copy_</code> 循环。</p>
+<p>脚本建议命名 <code>build/kv-transfer-lab/scripts/bench_gqa_transfer.py</code>。这是本步骤要创建的实验文件，并非仓库已提供的命令；后面的脚本参数也是本教程建议的接口，只有脚本实现并检查 <code>--help</code> 后才能执行。</p>
+<h3 id="codexp07">发给 Codex：P07</h3>
+<pre><code class="language-text">基于 path-audit.md 与现有 GPU 传输测试，编写实验脚本：
+build/kv-transfer-lab/scripts/bench_gqa_transfer.py。
+只增加实验脚本，不修改生产实现，不复制另一份 CUDA kernel。
+
+提供 --layers --kv-heads --head-dim --block-size --chunk-size --num-objects
+--direction store/retrieve --mapping contiguous/random --dtype
+--warmup --iterations --seed --output，以及 --correctness-only。
+路径选择参数只能使用当前代码真实支持的公共入口。
+若不能安全指定 direct/kernel，就使用 auto 并记录实际路径，明确比较的限制。
+
+要求：
+1. 调用真实 LMCache/native 数据路径，检查硬件能力、layout 与内存预算。
+2. 随机 block IDs 必须合法；scatter 目标不重复，未选中区域设 sentinel。
+3. 输入/host pinned/GPU buffers、block mapping 与校验参考在计时区外准备。
+4. store/retrieve 分开计时；一次样本包含完成语义，不能只测 enqueue。
+5. 每次被测调用不能因缓存去重变成 no-op；对象/数据复用语义要解释。
+6. 按实际 stream 记录 events，必要的跨流依赖保持正确，不能擅自删同步。
+7. CPU wall time 和可正确获得的 device 时间分别记录；不能把差值直接叫 Python 开销。
+8. 保存逐样本结果、实际有效字节数、seed、shape、stride、layout、实际路径、
+   Git SHA/dirty 状态、torch/CUDA、扩展路径和哈希；计时区不打印、不做 checksum。
+9. warmup 后及正式测量后分别做数据验证；失败返回非零。
+10. 缺失阶段计时就写 unavailable，禁止拿整个操作事件冒充其中的 kernel 时间。
+
+先检查 tiny correctness-only，再测试一次目标 GQA shape。
+写清楚此脚本测 kernel、完整传输操作还是包含 RPC 的 server 操作。
+</code></pre>
+<h3 id="_10">计时的最低要求</h3>
+<pre><code class="language-text">准备/初始化/校验 ── 不计入测量
+完成必要预热
+CPU t0
+  → 记录同一传输流上的起始 event（若可正确访问）
+  → 提交完整被测操作，保持生产依赖
+  → 记录完成 event / 等待公开的完成结果
+  → 确认数据可被消费者使用
+CPU t1
+校验/结果落盘 ─── 不计入测量
+</code></pre>
+<p>逐次同步适合测单操作 latency，会抑制流水线；另测吞吐时需要批量提交并正确排空，两类结果分开。不能从逐次同步实验推断 overlap 效果。</p>
+<p><strong>验收：</strong>Codex 能解释每个计时边界。先做 tiny case，再做目标 shape；新脚本实际调用的 CUDA 符号可以在 trace 中找到。</p>
+<h2 id="8">步骤 8：采集可重复的原版数据</h2>
+<h3 id="_11">你做什么</h3>
+<p>若只测进程内 microbenchmark，先在终端 A 用 Ctrl+C 停止此前的实验 server，避免其后台活动干扰。不要用宽泛的 <code>pkill python</code> 清理其他任务。</p>
+<p>确认 P07 实现的参数与下面示例一致后，运行：</p>
+<pre><code class="language-bash">python build/kv-transfer-lab/scripts/bench_gqa_transfer.py \
+  --layers 28 --kv-heads 2 --head-dim 128 \
+  --block-size 16 --chunk-size 256 --num-objects 4 \
+  --direction retrieve --mapping random --dtype bfloat16 \
+  --warmup 30 --iterations 200 --seed 20261027 \
+  --output build/kv-transfer-lab/raw/baseline-retrieve-run01.json
+</code></pre>
+<p>30 次预热、200 次测量是起点。若温度/频率或延迟分布尚未稳定，应调整实验时长并记录原因，不挑最好的一段。</p>
+<p>先测小矩阵，避免全参数组合：</p>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>第一轮</th>
+<th>发现问题后再扩展</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>KV heads</td>
+<td>2</td>
+<td>1、4、8，用作适用范围与回归检查</td>
+</tr>
+<tr>
+<td>层数</td>
+<td>28</td>
+<td>4、36</td>
+</tr>
+<tr>
+<td>block size</td>
+<td>实际引擎使用值；示例为 16</td>
+<td>当前 layout 支持的其他值</td>
+</tr>
+<tr>
+<td>chunk size</td>
+<td>256</td>
+<td>128、512，并核对整除与引擎约束</td>
+</tr>
+<tr>
+<td>对象数</td>
+<td>1、4、16</td>
+<td>2、8，以及跨批边界数量</td>
+</tr>
+<tr>
+<td>mapping</td>
+<td>连续、随机</td>
+<td>跳过前缀等特殊情况</td>
+</tr>
+<tr>
+<td>方向</td>
+<td>store、retrieve 分开</td>
+<td>不合并成一个无法归因的总数字</td>
+</tr>
+</tbody>
+</table>
+<p>单变量改变，每组至少三个独立进程重复。每次保存原始样本，不能只保留平均值。有效带宽采用相同口径 <code>logical_payload_bytes / completed_operation_seconds</code>，明确是有效载荷带宽，不是显存理论带宽或 PCIe 链路上实际所有流量。</p>
+<h3 id="codexp08">发给 Codex：P08</h3>
+<pre><code class="language-text">检查 microbenchmark 计时、完成语义、no-op 风险和内存预算，确认后执行第一轮原版实验。
+先做小矩阵，至少 3 次独立进程重复；顺序与 warmup 固定，记录温度/频率等可用信息。
+保存逐样本数据、每次运行的中位数/尾部与失败数；失败样本不能悄悄删除。
+输出 baseline-summary.md 和图表，列出稳定场景、噪声大的场景以及下一步该 profile 哪一组。
+还不修改生产代码；没有稳定基线就先修实验方法。
+</code></pre>
+<p><strong>验收：</strong>同配置的自然波动已知。几百个样本可以定位问题，但极高分位数仍需更多样本和独立运行支持。</p>
+<h2 id="9-nsight-systems">步骤 9：用 Nsight Systems 找到时间花在哪里</h2>
+<h3 id="_12">你做什么</h3>
+<p>Nsight Systems 先看时间线与调用关系；它不要求你先懂全部 GPU 硬件计数器。安装后检查：</p>
+<pre><code class="language-bash">nsys --version
+nsys profile --help
+nsys stats --help-reports
+</code></pre>
+<p>在<strong>真正执行 CUDA 工作的进程</strong>采集。进程内 P07 脚本可以直接这样启动：</p>
+<pre><code class="language-bash">nsys profile \
+  --trace=cuda,nvtx --sample=none --cpuctxsw=none \
+  --output=build/kv-transfer-lab/profiles/baseline-gqa-r01 \
+  python build/kv-transfer-lab/scripts/bench_gqa_transfer.py \
+    --layers 28 --kv-heads 2 --head-dim 128 \
+    --block-size 16 --chunk-size 256 --num-objects 4 \
+    --direction retrieve --mapping random --dtype bfloat16 \
+    --warmup 10 --iterations 30 --seed 20261027 \
+    --output build/kv-transfer-lab/raw/profile-only-r01.json
+</code></pre>
+<p>输出名使用未存在的新名称，不覆盖以前的 trace。profiling 的 30 次样本只用于解释，不作为正式 A/B 性能结果。<a href="https://docs.nvidia.com/nsight-systems/UserGuide/index.html">Nsight Systems 官方文档</a></p>
+<p>导出方便 Codex 阅读的统计：</p>
+<pre><code class="language-bash">nsys stats \
+  --report cuda_api_sum,cuda_gpu_kern_sum,cuda_gpu_mem_time_sum \
+  --format csv \
+  build/kv-transfer-lab/profiles/baseline-gqa-r01.nsys-rep \
+  &gt; build/kv-transfer-lab/profiles/baseline-gqa-r01-stats.csv
+</code></pre>
+<p>报告名以本机 <code>--help-reports</code> 为准。可在 Nsight Systems GUI 中打开 <code>.nsys-rep</code>，展开目标进程的 CUDA API、stream、kernel、memcpy 与 NVTX 区间。给 Codex 统计 CSV、能保留相关性的 trace/SQLite 导出和必要截图，不要求它只凭二进制文件名判断。统计中的 Time 百分比以相应汇总项为分母，不能直接视为完整操作的 wall-time 占比。<a href="https://docs.nvidia.com/nsight-systems/AnalysisGuide/index.html">官方分析指南</a></p>
+<h3 id="mp-server">如果使用独立 MP server</h3>
+<p>lmcache-driven 的 CUDA 工作通常在 server，单独 profile <code>lmcache bench server</code> 客户端可能看不到目标 kernel。先用 Ctrl+C 停掉原实验 server，再在终端 A 通过 nsys 启动 server，例如：</p>
+<pre><code class="language-bash">nsys profile \
+  --trace=cuda,nvtx --sample=none --cpuctxsw=none \
+  --delay=10 --duration=30 --kill=none \
+  --output=build/kv-transfer-lab/profiles/server-r01 \
+  lmcache server \
+    --host 127.0.0.1 --port 6555 \
+    --http-host 127.0.0.1 --http-port 8080 \
+    --l1-size-gb 0.5 --no-l1-use-lazy \
+    --chunk-size 256 --eviction-policy LRU \
+    --supported-transfer-mode lmcache_driven
+</code></pre>
+<p>终端 B 在服务健康后运行有界的合成负载，使请求落入 10–40 秒采集窗口。服务启动较慢就调整窗口；看不到目标活动时检查窗口，而不是把空 trace 当结论。<code>--kill=none</code> 让采集截止后不因 duration 杀掉服务；完成后仍由你在终端 A 结束自己启动的 server。</p>
+<h3 id="codexp09">发给 Codex：P09</h3>
+<pre><code class="language-text">根据 path-audit.md，确定需要 profile 的进程及采集窗口。
+检查本机 nsys 参数和已有 NVTX；优先复用现有标记，不添加高频热路径日志。
+采集一个小范围 trace，导出实际可用的统计和关联数据。
+逐项检查：CPU 准备、CUDA API 提交、memcpy、kernel 执行、launch 到 start 间隔、等待完成。
+指出有无目标符号、实际调用次数、活动对应哪个 stream，以及结果是否覆盖测量阶段。
+不能把各 stream 的 duration 简单相加，也不能仅从 kernel summary 推断关键路径。
+输出 profiles/README.md 和 reports/trace-analysis.md，证据不足就写不足。
+</code></pre>
+<p><strong>验收：</strong>能在时间线上圈出一次完整操作及其完成边界。API 时间、kernel 时间和首 token 时间被分别解释。</p>
+<h2 id="10-nsight-compute">步骤 10：决定是否需要 Nsight Compute</h2>
+<h3 id="_13">你做什么</h3>
+<p>仅当 nsys 证明目标 kernel 的执行本身占主要成本时，才深入 ncu。若主要时间是 CPU 描述符、RPC、memcpy、排队或同步，先分析相应环节。</p>
+<pre><code class="language-bash">ncu --version
+ncu --list-sets
+ncu --list-sections
+</code></pre>
+<p>在可独立执行的进程内 microbenchmark 上采样，kernel 名必须从实际 nsys trace 确认。下面的正则适用于仍使用该名称的版本；如果符号已重构，先替换为真实目标。</p>
+<pre><code class="language-bash">ncu --set basic \
+  --kernel-name 'regex:.*multi_layer_block_transfer_kernel.*' \
+  --launch-count 3 \
+  --export build/kv-transfer-lab/profiles/kernel-basic-r01 \
+  python build/kv-transfer-lab/scripts/bench_gqa_transfer.py \
+    --layers 28 --kv-heads 2 --head-dim 128 \
+    --block-size 16 --chunk-size 256 --num-objects 4 \
+    --direction retrieve --mapping random --dtype bfloat16 \
+    --warmup 0 --iterations 3 --seed 20261027 \
+    --output build/kv-transfer-lab/raw/ncu-only-r01.json
+</code></pre>
+<p>这里有意缩小被采集调用数，单独用于诊断。ncu 可能重放、串行化 kernel；不能把它的运行耗时当作未插桩性能。确认 replay 对实验中的 host/device 状态安全；出现限制时使用官方支持的适当 replay 模式和最小独立 case，不直接对完整推理服务收集全部指标。<a href="https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html">Nsight Compute CLI</a></p>
+<h3 id="codexp10">发给 Codex：P10</h3>
+<pre><code class="language-text">先判断 trace 是否足以支持“kernel execution 是瓶颈”。若不是，说明原因并跳过 ncu。
+若是，给一个只采少数目标 launch 的 ncu 命令，核对符号、权限和 replay 的正确性。
+解释 grid/block、有效线程工作、访存合并、寄存器、occupancy 与瓶颈的关系。
+不要把 occupancy 越高越好当作结论，也不要用 GPU DRAM throughput 冒充 host↔GPU 链路带宽。
+硬件计数器不可用时如实记录，继续能做的 nsys 与 wall-time 分析，不替我全局修改驱动权限。
+</code></pre>
+<p><strong>验收：</strong>有具体假设，例如某 shape 的线程利用或访存问题；不是只看到某个指标偏低就改代码。</p>
+<h2 id="11">步骤 11：从证据中选择一个局部优化</h2>
+<h3 id="_14">你做什么</h3>
+<p>先填写决策表：</p>
+<table>
+<thead>
+<tr>
+<th>观察到的证据</th>
+<th>合理的下一步</th>
+<th>需要排除</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>小 GQA blocks 的 direct 描述符开销占主导</td>
+<td>比较受支持的 direct/staged 路径，研究 size-aware 选择</td>
+<td>不安全的 host 地址、不同有效载荷、只测 enqueue</td>
+</tr>
+<tr>
+<td>某 layout 的 kernel 执行占主导</td>
+<td>调线程组织或已确认的访问热点，先限制适用范围</td>
+<td>已有向量化、偏移与 stride 语义、其他 dtype 回归</td>
+</tr>
+<tr>
+<td>重复 CPU 元数据准备明显</td>
+<td>缓存或复用真正不变量，处理生命周期</td>
+<td>block table/地址/注册代次其实会变化</td>
+</tr>
+<tr>
+<td>GPU 忙时 launch 等待长</td>
+<td>研究已支持路径及资源竞争</td>
+<td>kernel 执行并不慢，单纯改线程数无助于排队</td>
+</tr>
+<tr>
+<td>RPC/调度等待主导</td>
+<td>转向 connector/状态处理的独立问题</td>
+<td>把它包装成 gather/scatter 优化</td>
+</tr>
+<tr>
+<td>只看到链路饱和</td>
+<td>解释传输字节与硬件边界</td>
+<td>通过减少有效数据或校验制造加速</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_15">一条特别值得验证的假设</h3>
+<p>上游 <a href="https://github.com/LMCache/LMCache/blob/dev/docs/design/v1/multiprocess/lmcache_driven_transfer_copy_paths.md">direct/kernel 设计说明</a> 已明确讨论：direct 的每项描述符存在 CPU 成本，小 block 时可能不如 staged kernel；它也指出若实际负载出现这种情况，可以研究 block-size 门槛。这提供了具体调查依据，但不是现成的 4090 优化结果。</p>
+<p>以示例 GQA 的 block_size=16 计算，每层、每个 K 或 V plane 的有效 block 为 <code>16×2×128×2 = 8192 bytes</code>。实际 direct entry 是否合并 K/V、如何切分，取决于 layout 和 planner，必须由当前代码核实；整个 7 MiB chunk 不能直接拿来与单 entry 的门槛比较。</p>
+<p>不要照抄 H200 文档中的 crossover 数值作为 4090 阈值。仅当你的数据证明存在稳定交叉点，且覆盖布局、方向和较大 block 对照后，才考虑一个小的路径选择改动。改变 direct/staged 选择属于策略变化，需要说明规则和其他硬件的验证边界。</p>
+<h3 id="codexp11">发给 Codex：P11</h3>
+<pre><code class="language-text">阅读 baseline、trace 和可用的 ncu 结果，只提出最多 3 个候选改动。
+每个候选必须写：证据、假设、预期改善的阶段、涉及文件、正确性风险、反证实验。
+结合当前 issue/PR 检索重复工作，不能仅凭 issue Open 认为无人处理。
+优先检查小 GQA block 的 direct-vs-staged crossover 是否真实存在；
+如果不成立，就放弃该假设，不添加一个“应该有用”的阈值。
+选择一个最小方案，写 reports/proposal.md；其余候选明确暂不实施。
+</code></pre>
+<p><strong>验收：</strong>方案能用一句话解释“什么条件下，哪个操作为什么更快”，并有能推翻它的对照实验。</p>
+<h2 id="12">步骤 12：做一次最小实现，重新构建</h2>
+<h3 id="_16">你做什么</h3>
+<p>局部优化第一版只改一个决策或一个热点。先保存基线配置和脚本；涉及 <code>.cu/.cuh</code> 或原生绑定时重新构建，不能只重启 Python。</p>
+<pre><code class="language-bash">MAX_JOBS=2 uv pip install -e . --no-build-isolation
+uv pip check
+</code></pre>
+<p>如果构建系统没有重新编译已修改的文件，先看日志和实际产物，不盲目递归删除目录。让 Codex提出针对该构建产物的最小清理方式，并确认路径。重启之前导入过旧扩展的所有本次实验进程，记录新扩展哈希。</p>
+<h3 id="codexp12">发给 Codex：P12</h3>
+<pre><code class="language-text">按 reports/proposal.md 实现选中的单一局部优化，并添加必要回归测试。
+先检查工作区，只修改与该方案直接相关的文件，不顺手重构其他路径。
+保持 layout、skip-prefix、stride、host pin 边界、完成语义与资源生命周期正确。
+如果复用元数据，说明失效条件；如果改变选路，说明 fallback 与能力检查。
+不修改 AGENTS.md，不访问其他类私有成员，不为实验新增宽泛公共 API。
+构建后记录编译日志、加载路径和扩展哈希，确认相关进程已重启。
+运行最小正确性检查，报告实际结果；此步不宣布端到端提速。
+</code></pre>
+<p><strong>验收：</strong>diff 足够小，能从新进程证明正在使用新产物，没有同时改变两个独立性能因素。</p>
+<h2 id="13">步骤 13：先验证正确性，再谈性能</h2>
+<h3 id="_17">你做什么</h3>
+<p>源码入口可能存在这些测试；先在当前 checkout 搜索并收集实际测试名：</p>
+<pre><code class="language-bash">rg --files tests | rg 'mp_mem_kernels|direct_copy|transfer_dispatch|engine_driven_transfer'
+python -m pytest --collect-only -q tests/v1/test_mp_mem_kernels.py
+</code></pre>
+<p>最少覆盖：</p>
+<ul>
+<li>store 与 retrieve 分别正确；纯拷贝在对应逻辑 layout 下应精确匹配。</li>
+<li>随机、连续 block mapping；清空目标后恢复；未选中位置 sentinel 保持。</li>
+<li>chunk 数量 1、3、4、5 等批次边界，以及非零前缀跳过。</li>
+<li>BF16/FP16、受影响 layout 与至少一个不受影响对照。</li>
+<li>无效输入/不支持能力被拒绝或走既有 fallback。</li>
+<li>涉及异步生命周期的改动，覆盖连续调用、重用、异常与正常退出。</li>
+</ul>
+<p>示例测试命令（按实际改动筛选，不强求每个版本都有相同文件）：</p>
+<pre><code class="language-bash">python -m pytest -q tests/v1/test_mp_mem_kernels.py
+python -m pytest -q tests/v1/test_cuda_ops_parity.py
+</code></pre>
+<p>不要把“全部 skip”说成测试通过了目标路径。纯拷贝不应靠扩大误差容忍范围掩盖问题；随机浮点测试使用可控有限数值，必要时按字节验证 payload。</p>
+<p>如果修改 kernel，可以对 tiny case 补充：</p>
+<pre><code class="language-bash">compute-sanitizer --tool memcheck --error-exitcode 1 \
+  python build/kv-transfer-lab/scripts/bench_gqa_transfer.py \
+    --layers 2 --kv-heads 2 --head-dim 128 \
+    --block-size 16 --chunk-size 128 --num-objects 1 \
+    --direction retrieve --mapping random --dtype bfloat16 \
+    --warmup 0 --iterations 1 --seed 20261027 --correctness-only \
+    --output build/kv-transfer-lab/raw/sanitizer-r01.json
+</code></pre>
+<p>先确认工具支持当前环境。memcheck 不能证明跨 stream/CPU 的所有竞态都不存在；racecheck 主要针对共享内存 hazards，不能当作全部异步生命周期的证明。<a href="https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html">Compute Sanitizer</a></p>
+<h3 id="codexp13">发给 Codex：P13</h3>
+<pre><code class="language-text">针对本次改动制定并运行最小有意义的正确性矩阵。
+测试面向公共接口/数据契约；覆盖目标清空、sentinel、跳过前缀、随机映射、批次边界。
+已有测试缺少 GQA shape 时新增必要用例，不仅重复实现里的分支。
+按 passed/failed/skipped 分别报告，列出实际命中哪个数据路径。
+如果测试失败，先修正确性；不要放宽断言后继续性能测量。
+若用 sanitizer，说明它能检出的错误和仍未覆盖的并发风险。
+</code></pre>
+<p><strong>验收：</strong>数据正确、目标路径被执行；未测的 layout/硬件被明确列出。</p>
+<h2 id="14-ab">步骤 14：严格做原版/修改版 A/B</h2>
+<h3 id="_18">你做什么</h3>
+<p>推荐两个独立 worktree，各自有虚拟环境和本地原生构建产物，串行运行。它们使用相同的外部依赖版本、同一 benchmark 脚本和请求配置。不能让两个 editable install 指向同一源码，或在一个进程里换掉已加载的 <code>.so</code>。</p>
+<p><code>uv pip freeze</code> 可能包含指向源码目录的 editable 项；不要不加检查地把候选环境的完整 freeze 安装进基线环境。只共享核实过的外部依赖锁定清单，两边各自安装自己的 LMCache。</p>
+<h3 id="codexp14">发给 Codex：P14</h3>
+<pre><code class="language-text">制定并执行安全的 A/B 环境方案，保留我所有改动。
+基线使用 environment/base-sha.txt，候选使用当前补丁；优先两个 worktree、两个 venv。
+相同外部依赖与编译选项，两边各自构建并核对 lmcache/cuda_ops 路径和哈希。
+使用同一份 benchmark 脚本，记录其哈希；不能在两边各写一份略有不同的测量代码。
+每轮只允许一组 GPU 实验/服务，完成后排空并结束本轮拥有的进程。
+
+对主要场景和回归对照，按 A-B-B-A 或随机顺序至少 3 轮独立运行。
+采集正式计时数据时关闭 nsys/ncu，保持初始化、warmup、日志与同步边界一致。
+记录温度/频率、实际逻辑字节、路径、成功数和失败数。
+汇总逐次结果和跨运行波动，输出配对对比，不把每个 kernel launch 当作独立实验重复。
+收益未明显超过噪声就写 inconclusive，不能挑最好的一次。
+</code></pre>
+<p>空结果表应保持为空或标记未测：</p>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>原版操作延迟</th>
+<th>修改版操作延迟</th>
+<th>有效字节</th>
+<th>实际路径</th>
+<th>独立运行数</th>
+<th>结论</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GQA retrieve / 1 object</td>
+<td>未测</td>
+<td>未测</td>
+<td>待记录</td>
+<td>待确认</td>
+<td>0</td>
+<td>未测</td>
+</tr>
+<tr>
+<td>GQA retrieve / 16 objects</td>
+<td>未测</td>
+<td>未测</td>
+<td>待记录</td>
+<td>待确认</td>
+<td>0</td>
+<td>未测</td>
+</tr>
+<tr>
+<td>store 对照</td>
+<td>未测</td>
+<td>未测</td>
+<td>待记录</td>
+<td>待确认</td>
+<td>0</td>
+<td>未测</td>
+</tr>
+<tr>
+<td>较大 block / 更多 KV heads</td>
+<td>未测</td>
+<td>未测</td>
+<td>待记录</td>
+<td>待确认</td>
+<td>0</td>
+<td>未测</td>
+</tr>
+</tbody>
+</table>
+<p>收益计算时写清是 latency reduction <code>1 - candidate/baseline</code>，还是 speedup <code>baseline/candidate</code>。跨运行方差比一次运行内分位数更能提醒你环境不稳定。</p>
+<p><strong>验收：</strong>可以从原始数据重建结论，baseline 与 candidate 确认加载不同且正确的产物。</p>
+<h2 id="15-ttft">步骤 15：接上真实小模型，验证 TTFT</h2>
+<h3 id="_19">你做什么</h3>
+<p>现在再运行模型。先只做 1.5B、TP=1；3B 和更多并发属于第二轮。确认合成 benchmark 的 layout 与真实引擎相同或明确不同。</p>
+<p>终端 A 启动当前版本 LMCache server，参数沿用步骤 6。终端 B 启动模型；先停止合成客户端与其他 GPU 实验，给显示占用、CUDA context 和临时内存留余量。</p>
+<p>先保存帮助，确认对应版本支持这些参数：</p>
+<pre><code class="language-bash">vllm serve --help &gt; build/kv-transfer-lab/environment/vllm-serve-help.txt
+</code></pre>
+<p>启动模板：</p>
+<pre><code class="language-bash">vllm serve Qwen/Qwen2.5-1.5B-Instruct \
+  --dtype bfloat16 --tensor-parallel-size 1 \
+  --max-model-len 8192 --max-num-seqs 4 \
+  --gpu-memory-utilization 0.70 \
+  --no-enable-prefix-caching \
+  --kv-transfer-config \
+  '{"kv_connector":"LMCacheMPConnector","kv_role":"kv_both","kv_connector_extra_config":{"lmcache.mp.port":6555}}'
+</code></pre>
+<p>正式实验还需要固定模型/tokenizer revision；让 Codex根据当前 CLI 将已下载并记录 revision 的模型路径或 revision 参数加入启动脚本，不在两个版本间移动 <code>main</code>。此配置是 lmcache-driven 起步模板，engine-driven 用当前版本已核实的配置方式，不能只改 server 的模式就认为客户端切换成功。<a href="https://docs.vllm.ai/en/latest/cli/serve/">vLLM serve 参数</a></p>
+<p>终端 C 做最小请求检查：</p>
+<pre><code class="language-bash">curl --fail http://127.0.0.1:8000/v1/models
+</code></pre>
+<p>接下来让 Codex复用现有 engine benchmark，或写一个只负责控制请求与计时的小脚本。外部 KV 命中需要完整、相同的 token 前缀；不要靠大致相同的自然语言猜测。可从 2048/4096-token prefix、1/128-token output、并发 1/4 起步。</p>
+<p>运行时编译/图捕获预热与 KV cache 预热分开。用于隔离外部缓存时，两边都关闭原生 prefix cache；最终再以相同设置启用它，扩大工作集并验证 GPU miss、LMCache hit，检查真实组合使用下是否仍受益。</p>
+<h3 id="codexp15">发给 Codex：P15</h3>
+<pre><code class="language-text">在 GPU 预算内为 Qwen2.5-1.5B 建立真实端到端对照，先查当前 CLI 和 connector 配置。
+固定模型/tokenizer revision、dtype、调度参数、实际 GPU KV pool 与 host L1，记录运行时 layout。
+复用 engine benchmark；缺少控制能力时只写小型实验脚本，不重建整套 benchmark 框架。
+
+建立以下状态：
+1. 运行时已预热但目标 KV 为空的 cold-prefill；
+2. GPU 原生 prefix cache 不提供目标命中，但 LMCache L1 已有相同前缀；
+3. 原生 prefix cache 也启用的实际组合场景。
+每种状态给出命中/传输证据，不把“相同 prompt 再跑一次”自动算作 LMCache hit。
+
+先测 2K/4K prefix、输出 1 token、并发 1/4，再加输出 128 tokens 看 decode 影响。
+原版/候选使用相同 token 请求、采样设置、warmup、缓存重置与测量阶段。
+从流式响应测客户端 TTFT，记录失败、完成数和吞吐；多 token chunk 不能直接等同逐 token ITL。
+分开记录 lookup、传输完成和调度等待；不把整个 TTFT 归因于 CUDA kernel。
+输出 e2e-report.md，解释局部收益是否传递到 TTFT，若没有则如实解释。
+</code></pre>
+<p><strong>验收：</strong>实际模型确实经过被改动路径，命中和数据正确有证据。OOM 时降低规模，原版与候选同时调整；不能只给其中一侧加 <code>--enforce-eager</code>。</p>
+<h2 id="16-pr">步骤 16：整理结果、审查与准备 PR</h2>
+<h3 id="_20">你做什么</h3>
+<p>如果改动只在特定 4090/GQA 形状上有效，就明确写出范围。个人研究记录可以保留尝试；正式 PR 只包含维护者评审所需的核心改动、必要测试和说明。</p>
+<p>GPU 热点没有稳定收益时，依然可以整理可复用 benchmark 或正确性测试，但要先确认项目是否需要，并与现有实现去重。没有收益不应强行提交运行时阈值。</p>
+<h3 id="codexp16">发给 Codex：P16</h3>
+<pre><code class="language-text">基于真实日志与结果写 reports/final-report.md：
+问题与触发条件、调用路径、测量方法、基线/候选版本、改动原理、正确性、
+microbenchmark、端到端结果、回归、未测硬件与可复现命令。
+不要补造空缺数值，不把调查假设写成已确认根因。
+
+做一次独立视角代码审查，重点查：索引/stride、边界、缓存失效、stream/event、
+对象生命周期、未选中区域、错误路径、CPU/GPU 额外内存，以及 benchmark 是否偏向候选。
+按严重性列出发现，修复有依据的问题后复跑相应检查。
+最后生成 PR 标题与描述草稿，目标 dev，链接已核实相关 issue/PR，
+区分 GPU 实测与 stub 测试；不推送、不评论、不创建 PR。
+</code></pre>
+<p>lint 与测试按仓库指引运行。涉及 Python/CUDA 时核对对应格式工具；执行全仓 pre-commit 前检查 cargo、rustfmt 和 clippy，非 Rust 验证可以按仓库规则显式跳过 Rust hooks。全套标准 pytest 命令忽略了 MP/distributed，必须单独运行本次涉及的测试。</p>
+<p>如果调整了文档，按仓库要求执行 Sphinx clean/html；保留已有错误与新增错误的区别，不能把构建失败写成成功。提交前再次检查社区是否已有相同实现。</p>
+<p><strong>验收：</strong>另一位开发者能按文档复现；PR 的主张与证据匹配。用户明确要求提交时才执行 sign-off commit、push 和 PR 创建。</p>
+<h2 id="17">步骤 17：跨天继续工作与常见故障提示词</h2>
+<h3 id="p17">跨会话续接：P17</h3>
+<pre><code class="language-text">请把本轮状态写入 build/kv-transfer-lab/STATE.md，不修改 AGENTS.md。
+记录实际环境、基线 SHA、候选 diff、扩展路径/哈希、已通过检查及结果文件，
+当前瓶颈假设、被否定的假设、尚未验证事项、我自己启动的进程、下一条准确命令。
+不要把待执行任务记成完成；不要只保留口头结论。
+</code></pre>
+<p>新会话发：</p>
+<pre><code class="language-text">继续这项 LMCache 单卡 KV 传输实验。先读 AGENTS.md 和 build/kv-transfer-lab/STATE.md，
+核对工作区、实际 cwd/venv/GPU、源码版本与加载扩展是否仍一致。
+只推进 STATE.md 里的下一步；任何前提发生变化先记录，避免混用旧 trace 和新代码。
+</code></pre>
+<h3 id="_21">报错时直接复制的提示词</h3>
+<table>
+<thead>
+<tr>
+<th>现象</th>
+<th>发给 Codex 的提示词</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>安装/编译失败</td>
+<td>“读取完整构建日志，定位第一个根因。区分缺依赖、ABI、Toolkit、架构、OOM；给一个最小修复并重跑，不连续盲升 torch/CUDA。”</td>
+</tr>
+<tr>
+<td><code>illegal memory access</code></td>
+<td>“停止性能测量。结合实际路径检查地址能力、layout、生命周期和 #5860；用 tiny correctness case 定位。当前 CUDA context 可能已污染，修复后重启相关实验进程再测。”</td>
+</tr>
+<tr>
+<td>全部测试 skip</td>
+<td>“列出 skip 的精确原因与缺失前提，证明目标路径是否运行；不能把退出码 0 当作 GPU 正确性通过。”</td>
+</tr>
+<tr>
+<td>trace 没有目标 kernel</td>
+<td>“核对进程、时间窗口、实际 direct/fallback、符号变化、请求是否命中。先证实发生过目标传输。”</td>
+</tr>
+<tr>
+<td>修改 <code>.cu</code> 后数字不变</td>
+<td>“核对构建日志、扩展路径/哈希、venv 和进程是否重启；然后检查目标分支是否真正执行。”</td>
+</tr>
+<tr>
+<td>数字变快很多</td>
+<td>“审计计时完成边界、字节数、no-op、目标清空、同步、warmup 与缓存状态。先排除测量错误，再解释收益。”</td>
+</tr>
+<tr>
+<td>多次运行差异大</td>
+<td>“保留全部原始结果，检查频率/温度/其他进程、CPU 调度、内存与 warmup。先评估噪声，不放宽验收。”</td>
+</tr>
+<tr>
+<td>checksum 不匹配</td>
+<td>“逐层、K/V、逻辑 token、head 定位首个差异，并检查 sentinel；保持严格断言，不先调整误差阈值。”</td>
+</tr>
+<tr>
+<td>本地结果与官方文档不同</td>
+<td>“按当前 SHA/shape/硬件比较路径与前提，不把另一硬件的 crossover/带宽直接当成本机预期。”</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_22">建议的第一周安排</h2>
+<table>
+<thead>
+<tr>
+<th>时间</th>
+<th>只完成这些内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>第 1 天</td>
+<td>P00–P03：环境、概念、独立 checkout、基线与版本计划</td>
+</tr>
+<tr>
+<td>第 2 天</td>
+<td>P04–P06：GPU 扩展、调用链、合成 KV 正确性 smoke</td>
+</tr>
+<tr>
+<td>第 3–4 天</td>
+<td>P07–P08：可信 microbenchmark 和重复基线</td>
+</tr>
+<tr>
+<td>第 5 天</td>
+<td>P09：能解释一次操作的 Nsight Systems 时间线</td>
+</tr>
+<tr>
+<td>第 6–7 天</td>
+<td>按需要 P10，再做 P11：选出一个有反证实验的最小方案</td>
+</tr>
+</tbody>
+</table>
+<p>依赖兼容问题可能多花时间，不必强行赶进度。第一周能够解释“当前版本在我的硬件上如何搬 KV、时间花在哪里”，已经是后续优化的重要基础。</p>
+<h2 id="_23">资料与证据索引</h2>
+<table>
+<thead>
+<tr>
+<th>资料</th>
+<th>用途与边界</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="https://learn.chatgpt.com/docs/prompting">OpenAI 官方 Prompting</a></td>
+<td>提供上下文、明确输出、验证与分步协作；本文提示词为本项目编写</td>
+</tr>
+<tr>
+<td><a href="https://docs.nvidia.com/cuda/wsl-user-guide/index.html">GPU/WSL 要求</a></td>
+<td>区分 Windows 驱动与 Linux Toolkit，检查平台限制</td>
+</tr>
+<tr>
+<td><a href="https://docs.vllm.ai/en/latest/getting_started/installation/gpu/">vLLM GPU 安装</a></td>
+<td>选择兼容版本及构建方式</td>
+</tr>
+<tr>
+<td><a href="https://docs.nvidia.com/nsight-systems/UserGuide/index.html">Nsight Systems</a></td>
+<td>时间线、NVTX、CUDA API 与跨进程路径归因</td>
+</tr>
+<tr>
+<td><a href="https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html">Nsight Compute CLI</a></td>
+<td>已确认热点 kernel 的进一步分析，注意 replay 影响</td>
+</tr>
+<tr>
+<td><a href="https://docs.nvidia.com/compute-sanitizer/ComputeSanitizer/index.html">Compute Sanitizer</a></td>
+<td>在工具支持范围内检查内存错误与同步问题</td>
+</tr>
+<tr>
+<td><a href="https://github.com/LMCache/LMCache/blob/dev/docs/design/v1/multiprocess/lmcache_driven_transfer_copy_paths.md">copy-path 设计</a></td>
+<td>direct/staged 机制与小 block 假设；文档里的其他硬件数据不是本机结果</td>
+</tr>
+<tr>
+<td><a href="https://github.com/LMCache/LMCache/issues/5440">#5440</a></td>
+<td>engine-driven 小对象开销调查；不同 GPU/多阶段场景，先复现，不照搬归因</td>
+</tr>
+<tr>
+<td><a href="https://github.com/LMCache/LMCache/pull/5308">#5308</a></td>
+<td>已合并直接拷贝实现，避免重复开发</td>
+</tr>
+<tr>
+<td><a href="https://github.com/LMCache/LMCache/issues/5860">#5860</a>、<a href="https://github.com/LMCache/LMCache/pull/5861">#5861</a></td>
+<td>host 地址能力相关问题，状态会变化，开始实验前重新核对</td>
+</tr>
+<tr>
+<td><a href="../../single_gpu_inference_optimization_plan.md">单卡选题路线</a></td>
+<td>本教程对应的总体选题与求职展示计划</td>
+</tr>
+</tbody>
+</table>
+<p>本文命令已根据所读源码和官方文档检查；GPU、模型服务、编译与性能实验尚未在用户笔记本上执行。教程中的脚本生成步骤必须完成后，相关命令才有可执行目标。</p></main></html>
