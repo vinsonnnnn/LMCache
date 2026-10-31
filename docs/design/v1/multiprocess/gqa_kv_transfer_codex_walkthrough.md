@@ -212,33 +212,62 @@ git status --short
 
 ### 你做什么
 
-在步骤 3 确认具体版本后安装。下列模板中的 `VLLM_VERSION` 必须设置为 `environment-plan.md` 确认的实际值；不能把尖括号占位符当成版本安装。
+从当前实验 checkout 的仓库根目录执行。本文统一使用 `build/kv-transfer-lab/.venv`；根目录的 `.venv` 是另一个环境。终端显示 `(.venv)` 不能证明激活了哪一个，因为两个目录的名字都叫 `.venv`。
+
+**仅首次创建环境时执行：**先在步骤 3 确认 Python、vLLM、PyTorch 和 Toolkit 的具体组合。已有实验环境时跳过创建，不要另建根目录 `.venv`，也不要覆盖已有环境。
 
 ```bash
-uv venv --python 3.12 .venv
-source .venv/bin/activate
+mkdir -p build/kv-transfer-lab/environment
+test ! -e build/kv-transfer-lab/.venv && \
+  uv venv --python 3.12 build/kv-transfer-lab/.venv
 ```
 
-然后设置已确认的 `VLLM_VERSION`，再运行：
+**首次创建后或每次重新打开终端：**如果激活了其他虚拟环境，先运行 `deactivate`，然后激活实验环境并核对解释器。
 
 ```bash
-uv pip install "vllm==${VLLM_VERSION:?请先设置已确认的具体版本}"
-uv pip install -r requirements/build.txt
-MAX_JOBS=2 uv pip install -e . --no-build-isolation
-uv pip install -r requirements/test.txt pre-commit
-uv pip check
+source build/kv-transfer-lab/.venv/bin/activate
+hash -r
+command -v python
+python -c 'import sys; print(sys.executable); print(sys.prefix)'
+```
+
+`command -v python` 和 `sys.executable` 应指向当前 checkout 下的 `build/kv-transfer-lab/.venv/bin/python`，`sys.prefix` 应为该环境目录。下面的安装与检查另外显式指定解释器，避免 `uv` 跟随错误的活动环境。
+
+**需要安装时才执行：**按照 `environment-plan.md` 设置已确认的 `VLLM_VERSION`、Toolkit 路径及构建选项；如计划列出额外版本约束，安装时一并使用。不能把尖括号占位符当成版本，也不要在已有验证通过的环境里重复安装或升级。逐条执行，任一命令失败就停下并保留完整输出。
+
+```bash
+uv pip install --python build/kv-transfer-lab/.venv/bin/python \
+  "vllm==${VLLM_VERSION:?请先设置已确认的具体版本}"
+uv pip install --python build/kv-transfer-lab/.venv/bin/python \
+  -r requirements/build.txt
+MAX_JOBS=2 uv pip install --python build/kv-transfer-lab/.venv/bin/python \
+  -e . --no-build-isolation
+uv pip install --python build/kv-transfer-lab/.venv/bin/python \
+  -r requirements/test.txt pre-commit
+uv pip check --python build/kv-transfer-lab/.venv/bin/python
 ```
 
 先让兼容的 vLLM 安装选择其依赖的 torch，不要随后随意单独升级 torch。编译 OOM 时先降低 `MAX_JOBS`；架构限制仅在确认本卡 compute capability 后设置。做 CUDA 优化不能用 `NO_NATIVE_EXT=1` 或 `NO_GPU_EXT=1` 代替 GPU 扩展构建。
 
-检查实际导入：
+已有安装可直接从这里检查，不需要重建环境。检查实际导入：
 
 ```bash
-python - <<'PY'
+build/kv-transfer-lab/.venv/bin/python - <<'PY'
+# SPDX-License-Identifier: Apache-2.0
+# Standard
 import sys
+from pathlib import Path
+
+# Third Party
 import torch
+
+# First Party
 import lmcache
 import lmcache.cuda_ops as cuda_ops
+
+expected_env = Path("build/kv-transfer-lab/.venv").resolve()
+assert Path(sys.prefix).resolve() == expected_env, "使用了错误的虚拟环境"
+assert sys.version_info[:2] == (3, 12), "需要 Python 3.12"
 
 print("python:", sys.executable)
 print("torch:", torch.__version__, "cuda runtime:", torch.version.cuda)
@@ -255,15 +284,24 @@ print("basic CUDA check passed")
 PY
 ```
 
-这只是 CUDA/import 检查，不证明 LMCache KV 传输正确。随后保存环境与 CLI 帮助：
+若出现 `ModuleNotFoundError: No module named 'torch'`，先核对解释器与目标环境中的安装记录；若出现 `lmcache: command not found`，先核对激活路径和目标环境中的 CLI。不要据此单独升级 torch、重装驱动，或把空输出文件当成通过。
+
+这只是 CUDA/import 检查，不证明 LMCache KV 传输正确。随后逐条保存环境与 CLI 帮助，并记录各命令退出码；标准错误也写入文件，失败时保留错误信息：
 
 ```bash
-uv pip freeze > build/kv-transfer-lab/environment/packages.txt
-nvcc --version > build/kv-transfer-lab/environment/nvcc.txt
-nvidia-smi > build/kv-transfer-lab/environment/nvidia-smi.txt
-lmcache server --help > build/kv-transfer-lab/environment/server-help.txt
-lmcache bench server --help > build/kv-transfer-lab/environment/server-bench-help.txt
-lmcache bench engine --help > build/kv-transfer-lab/environment/engine-bench-help.txt
+mkdir -p build/kv-transfer-lab/environment
+uv pip freeze --python build/kv-transfer-lab/.venv/bin/python \
+  > build/kv-transfer-lab/environment/packages.txt 2>&1
+uv pip check --python build/kv-transfer-lab/.venv/bin/python \
+  > build/kv-transfer-lab/environment/pip-check.txt 2>&1
+nvcc --version > build/kv-transfer-lab/environment/nvcc.txt 2>&1
+nvidia-smi > build/kv-transfer-lab/environment/nvidia-smi.txt 2>&1
+build/kv-transfer-lab/.venv/bin/lmcache server --help \
+  > build/kv-transfer-lab/environment/server-help.txt 2>&1
+build/kv-transfer-lab/.venv/bin/lmcache bench server --help \
+  > build/kv-transfer-lab/environment/server-bench-help.txt 2>&1
+build/kv-transfer-lab/.venv/bin/lmcache bench engine --help \
+  > build/kv-transfer-lab/environment/engine-bench-help.txt 2>&1
 ```
 
 ### 发给 Codex：P04
@@ -328,7 +366,7 @@ rg --files tests | rg 'direct_copy|mp_mem_kernels|engine_driven_transfer|transfe
 终端 A：激活虚拟环境，在空闲端口启动独立服务。这里关闭 lazy L1，避免把默认初始化容量误带入小内存实验；两个版本要保持相同分配方式。
 
 ```bash
-source .venv/bin/activate
+source build/kv-transfer-lab/.venv/bin/activate
 lmcache server \
   --host 127.0.0.1 --port 6555 \
   --http-host 127.0.0.1 --http-port 8080 \
@@ -340,7 +378,7 @@ lmcache server \
 终端 B：同一 checkout、同一虚拟环境中：
 
 ```bash
-source .venv/bin/activate
+source build/kv-transfer-lab/.venv/bin/activate
 curl --fail http://127.0.0.1:8080/healthcheck
 lmcache bench server \
   --rpc-url tcp://127.0.0.1:6555 \
@@ -625,8 +663,9 @@ ncu --set basic \
 局部优化第一版只改一个决策或一个热点。先保存基线配置和脚本；涉及 `.cu/.cuh` 或原生绑定时重新构建，不能只重启 Python。
 
 ```bash
-MAX_JOBS=2 uv pip install -e . --no-build-isolation
-uv pip check
+MAX_JOBS=2 uv pip install --python build/kv-transfer-lab/.venv/bin/python \
+  -e . --no-build-isolation
+uv pip check --python build/kv-transfer-lab/.venv/bin/python
 ```
 
 如果构建系统没有重新编译已修改的文件，先看日志和实际产物，不盲目递归删除目录。让 Codex提出针对该构建产物的最小清理方式，并确认路径。重启之前导入过旧扩展的所有本次实验进程，记录新扩展哈希。
