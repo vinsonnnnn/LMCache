@@ -858,7 +858,11 @@ class ServerBenchClient:
                     "[rank %d] Allocated %d GPU tensors on %s"
                     % (rank, len(allocated), allocated[0].device)
                 )
-                kv_wrappers = [wrap_one_kv_cache(tensor) for tensor in allocated]
+                kv_wrappers = (
+                    [wrap_one_kv_cache(tensor) for tensor in allocated]
+                    if use_handle
+                    else []
+                )
                 client_kv_tensors = allocated
                 rank_shm_mappings: list[tuple[int, int]] = []
             else:

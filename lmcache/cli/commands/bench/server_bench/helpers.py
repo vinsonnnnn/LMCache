@@ -753,9 +753,10 @@ def _compute_client_checksums(
             # ``contiguous().numpy().tobytes()`` survives non-contiguous
             # slices and dtype quirks (bfloat16 has no numpy view, but
             # uint8 reinterpret works after slice).
+            # CUDA tensors need a blocking host copy before NumPy hashing.
             block_dim = 0 if _tensor_is_mla(t) else 1
             view = t.narrow(block_dim, start_b, end_b - start_b).contiguous()
-            h.update(view.view(torch.uint8).numpy().tobytes())
+            h.update(view.view(torch.uint8).cpu().numpy().tobytes())
         checksums.append(h.hexdigest())
     return checksums
 

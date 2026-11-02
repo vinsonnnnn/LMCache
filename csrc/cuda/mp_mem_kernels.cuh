@@ -51,7 +51,9 @@ void execute_object_group_transfer(
  *
  * @param paged_buffer_ptrs_tensor  GPU int64 tensor of data pointers into
  *                                  vLLM paged buffers (one per tensor)
- * @param lmcache_objects_ptrs      Raw pointers to LMCache memory objects
+ * @param lmcache_objects_ptrs      Device or registered host pointers to
+ * LMCache objects; host pointers are mapped to their GPU aliases before kernel
+ * launch
  * @param block_ids                 GPU int64 tensor of block indices in vLLM
  *                                  paged buffer
  * @param device                    CUDA device of vLLM tensors

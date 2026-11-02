@@ -388,21 +388,35 @@ void multi_layer_block_kv_transfer_templated(
               num_blocks_per_object * shape_desc.bs,
               ") must equal lmcache_chunk_size (", lmcache_chunk_size, ")");
 
+  const at::cuda::OptionalCUDAGuard device_guard(device);
+
   // --- Build MemoryObj4 ---
   MemoryObj4<ScalarType> lmcache_obj4;
   lmcache_obj4.num_objects = num_objects;
   for (int i = 0; i < 4; ++i) {
-    lmcache_obj4.objects[i] =
-        (i < num_objects)
-            ? reinterpret_cast<ScalarType*>(lmcache_objects_ptrs[i])
-            : nullptr;
+    lmcache_obj4.objects[i] = nullptr;
+    if (i < num_objects) {
+      void* ptr = reinterpret_cast<void*>(lmcache_objects_ptrs[i]);
+      cudaPointerAttributes attributes{};
+      const cudaError_t status = cudaPointerGetAttributes(&attributes, ptr);
+      TORCH_CHECK(status == cudaSuccess, "cudaPointerGetAttributes failed: ",
+                  cudaGetErrorString(status));
+      // Registered host memory can have a different GPU virtual address.
+      // Device staging buffers already carry a kernel-accessible pointer.
+      if (attributes.type == cudaMemoryTypeHost) {
+        ptr = attributes.devicePointer;
+      }
+      TORCH_CHECK(
+          ptr != nullptr && attributes.type != cudaMemoryTypeUnregistered,
+          "LMCache objects must be device or mapped pinned memory");
+      lmcache_obj4.objects[i] = static_cast<ScalarType*>(ptr);
+    }
   }
 
   // --- Build paged buffer pointer array ---
   ScalarType** paged_buffer_ptrs =
       reinterpret_cast<ScalarType**>(paged_buffer_ptrs_tensor.data_ptr());
 
-  const at::cuda::OptionalCUDAGuard device_guard(device);
   const cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 
   // --- block_ids is a GPU int64 tensor, read directly ---

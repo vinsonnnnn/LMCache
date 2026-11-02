@@ -363,7 +363,7 @@ rg --files tests | rg 'direct_copy|mp_mem_kernels|engine_driven_transfer|transfe
 
 初期先不启动 vLLM。用真实 LMCache server 和合成 GPU KV 测注册、store、retrieve 与校验，降低环境复杂度。
 
-**前置条件：单进程 CUDA 检查通过，还必须能跨进程导入 CUDA storage。**HTTP healthcheck 只证明服务存活，不证明 `REGISTER_KV_CACHE`、store/retrieve 或数据校验通过。若已遇到下面的注册错误，先诊断 IPC，不要重复启动服务或直接进入步骤 7。
+**先按传输模式检查前置条件。**`lmcache_driven` 需要跨进程导入 GPU storage；本节在已复现 memory IPC 失败的环境中显式使用已有的 `engine_driven`，由客户端完成真实 GPU↔CPU 搬运，server 管理 L1。它仍使用 CUDA/native 扩展，但不导出 GPU KV handles；这不等于修复了原模式的底层 IPC。HTTP healthcheck 只证明服务存活，不证明注册、store/retrieve 或数据校验通过。
 
 先核对当前 checkout 的 `lmcache server --help`、`lmcache bench server --help`，实际确认 6555/8080 端口空闲，再启动服务。两个终端使用同一 checkout、同一虚拟环境；server 保持前台运行，只用 Ctrl-C 停止自己启动的实例。若已有 server，先确认其 PID、环境和配置，勿并发启动第二轮 GPU 实验。
 
@@ -377,7 +377,7 @@ rg --files tests | rg 'direct_copy|mp_mem_kernels|engine_driven_transfer|transfe
 | 3 组不同序列的 L1 payload | 最多约 42 MiB；后续另做一组严格校验再加 14 MiB |
 | L1 配置 | `0.125 GiB = 128 MiB`，关闭 lazy L1；还需为元数据和其他主存开销留余量 |
 
-GPU 预算还需加 server staging、block-ID buffer、pointer tables、两进程 CUDA context 和临时 buffer。当前路径按最多 4 个 chunk staging 与 1M 个 int64 block IDs 估算，另需约 28 MiB + 8 MiB，固定数据合计约 92 MiB；不把 56 MiB 当作总显存需求。运行前重新记录可用显存和主存。两个版本比较时保持相同分配方式。
+`engine_driven` 的 GPU 预算还需加客户端打包 tensor、pointer tables、block IDs、CUDA context 和临时 buffer，不能把 56 MiB 当作总显存需求。只有另测 `lmcache_driven` 时，才需为其 server staging 和 1M 个 int64 block IDs 另留约 28 MiB + 8 MiB，固定数据合计约 92 MiB。运行前重新记录可用显存和主存；比较两个版本时保持相同模式与分配方式。
 
 终端 A：
 
@@ -389,7 +389,7 @@ lmcache server \
   --l1-size-gb 0.125 --no-l1-use-lazy \
   --chunk-size 256 --eviction-policy LRU \
   --max-gpu-workers 1 --max-cpu-workers 1 \
-  --supported-transfer-mode lmcache_driven --no-isolated-ipc
+  --supported-transfer-mode engine_driven --no-isolated-ipc
 ```
 
 终端 B：
@@ -400,7 +400,7 @@ curl --fail http://127.0.0.1:8080/healthcheck &&
 lmcache bench server \
   --rpc-url tcp://127.0.0.1:6555 \
   --url http://127.0.0.1:8080 \
-  --mode gpu --transfer-mode lmcache_driven --tp-size 1 \
+  --mode gpu --transfer-mode engine_driven --tp-size 1 \
   --num-blocks 128 --block-size 16 \
   --kvcache-shape-spec '(2,128,16,2,128):bfloat16:28' \
   --num-tokens 512 --start 0 --end 3 --interval 0.5
@@ -414,7 +414,7 @@ shape spec 表示 K/V=2、128 个 blocks、每 block 16 tokens、2 KV heads、he
 
 ### 注册失败时：先定位 CUDA IPC
 
-若 client 显示 `REGISTER_KV_CACHE: FAIL`，同时 server 出现：
+若改测 `lmcache_driven` 时 client 显示 `REGISTER_KV_CACHE: FAIL`，同时 server 出现：
 
 ```text
 CudaIPCWrapper.to_tensor
@@ -433,7 +433,11 @@ CudaIPCWrapper.to_tensor
 
 `Producer process has been terminated before all shared CUDA tensors released` 必须保留，但它可能伴随注册失败后的退出；仅凭这条后续 warning 不能确定生产者提前退出是首因。若 32-byte 探针在明确保活的条件下复现相同错误，应继续诊断 IPC，而不是增大 L1、关闭 checksum 或重新编译无关 kernel。
 
-本实验已有一次相同的失败记录：`build/kv-transfer-lab/smoke.md`，原始日志及不含 LMCache 的探针结果在 `build/kv-transfer-lab/smoke-20261101/`。当时 CPU 控制组通过、32-byte CUDA IPC 导入失败，bench 退出 1、完成 0 组，未执行任何 store/retrieve/checksum。这是本地既有证据，未随教程提交，也不是对其他机器或后续环境的保证；复测应使用新目录。
+本地原模式失败记录仍保存在 `build/kv-transfer-lab/smoke.md` 和 `build/kv-transfer-lab/smoke-20261101/`，不覆盖。另一次直接使用 CUDA 13.0 C runtime、完全不导入 PyTorch/LMCache 的探针也在 memory handle 导入时返回 400。因此本节使用新的 `engine_driven` 配置；复测结果与原路径分开记录。
+
+当前修复还覆盖两个由真实执行暴露的问题：GPU data-mode checksum 必须先把字节视图同步复制到 CPU，再做 NumPy/MD5；native block-transfer 必须将注册主存的 CPU 指针解析为 GPU 映射地址。已注册或 `is_pinned=True` 不保证两个地址相同，不能直接将任意注册主存的 CPU 地址交给 kernel。
+
+该配置的本地真实 CLI 与严格 native roundtrip 记录在 `build/kv-transfer-lab/ipc-fix-20261102/`；记录不随教程提交，其他机器仍需自己运行。注册成功和 CLI checksum 通过之后，仍按下面的条件做严格验证。后续 profile 时，`engine_driven` 的 GPU 搬运在客户端；不要沿用原模式的 server-only profile，也不要把两个模式的速度差当成局部代码优化收益。
 
 ### 正确性通过的条件
 
@@ -976,4 +980,4 @@ lint 与测试按仓库指引运行。涉及 Python/CUDA 时核对对应格式�
 | [#5860](https://github.com/LMCache/LMCache/issues/5860)、[#5861](https://github.com/LMCache/LMCache/pull/5861) | host 地址能力相关问题，状态会变化，开始实验前重新核对 |
 | [单卡选题路线](../../single_gpu_inference_optimization_plan.md) | 本教程对应的总体选题与求职展示计划 |
 
-本文命令须按当前 checkout 和运行环境复核。已有本地 smoke 失败记录见步骤 6：注册失败不代表 store/retrieve 通过；模型服务与性能结论仍需独立验证。教程中的脚本生成步骤必须完成后，相关命令才有可执行目标。
+本文命令须按当前 checkout 和运行环境复核。原路径失败与 engine-driven 兼容路径验证分开记录，见步骤 6；模型服务与性能结论仍需独立验证。教程中的脚本生成步骤必须完成后，相关命令才有可执行目标。

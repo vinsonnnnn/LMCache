@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Standard
+import mmap
 import random
 
 # Third Party
@@ -9,6 +10,7 @@ import torch
 
 # First Party
 from lmcache import torch_dev, torch_device_type
+from lmcache.v1.platform import current_device_spec
 
 pytest.importorskip(
     "lmcache.cuda_ops",
@@ -649,3 +651,74 @@ def test_block_transfer_roundtrip_large_block(dtype, mem_device):
             assert torch.equal(src_data[layer_idx], tgt_data[layer_idx]), (
                 f"Mismatch at block index {i}, layer {layer_idx}"
             )
+
+
+@pytest.mark.no_shared_allocator
+def test_block_transfer_registered_host_memory() -> None:
+    """Roundtrip through registered mmap storage with disjoint block mappings.
+
+    Registered host memory may have a different device address, unlike memory
+    allocated by torch's pinned allocator. Check both transfer directions and
+    untouched blocks using the public native entry point.
+
+    Returns:
+        None.
+
+    Raises:
+        AssertionError: If registration or exact block/sentinel checks fail.
+    """
+    source = [
+        torch.randn((2, 8, 2, 2, 4), dtype=torch.bfloat16, device=torch_device_type)
+        for _ in range(2)
+    ]
+    original = [tensor.clone() for tensor in source]
+    target = [torch.full_like(tensor, -1) for tensor in source]
+    with mmap.mmap(-1, 4096) as backing:
+        chunk = torch.frombuffer(backing, dtype=torch.bfloat16, count=128).reshape(
+            2, 2, 4, 8
+        )
+        ptr = chunk.data_ptr()
+        assert current_device_spec.pin_memory(ptr, len(backing))
+        try:
+            call_block_kernel(
+                source,
+                [chunk],
+                [1, 4],
+                FMT_NORMAL,
+                lmcache_native.TransferDirection.D2H,
+                2,
+                8,
+                2,
+                2,
+                4,
+                False,
+                4,
+            )
+            torch_dev.synchronize()
+            expected = torch.stack(
+                [tensor[:, [1, 4]].reshape(2, 4, 8) for tensor in source], dim=1
+            ).cpu()
+            assert torch.equal(chunk, expected)
+            call_block_kernel(
+                target,
+                [chunk],
+                [2, 6],
+                FMT_NORMAL,
+                lmcache_native.TransferDirection.H2D,
+                2,
+                8,
+                2,
+                2,
+                4,
+                False,
+                4,
+            )
+            torch_dev.synchronize()
+            for src, saved, dst in zip(source, original, target, strict=True):
+                assert torch.equal(src, saved)
+                assert torch.equal(dst[:, 2], src[:, 1])
+                assert torch.equal(dst[:, 6], src[:, 4])
+                assert torch.all(dst[:, [0, 1, 3, 4, 5, 7]] == -1)
+        finally:
+            current_device_spec.unpin_memory(ptr)
+            del chunk
